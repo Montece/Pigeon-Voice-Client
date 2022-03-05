@@ -95,7 +95,7 @@ namespace Pigeon_Client
 
             if (msg.Length > 0 && msg != "")
             {
-                if (msg[1] == '/')
+                if (msg[0] == '/')
                 {
                     msg = msg.Substring(1);
                     if (msg.Contains("download "))
@@ -253,9 +253,15 @@ namespace Pigeon_Client
                         RemoveUser_async(data);
                         break;
                     case ServerCommands.SendFileStatus:
-                        MessageBox.Show(JSONcommand.Parameters[0]);
+                        if (bool.Parse(JSONcommand.Parameters[0]))
+                        {
+                            ShowNewMessage_async("[SERVER]: Скачивание файла...");
+                            //DownloadFile
+                        }
+                        else ShowNewMessage_async("[SERVER]: Файл не найден!");
                         break;
-                    default: break;
+                    default:
+                        break;
                 }
             }
         }
