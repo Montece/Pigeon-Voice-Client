@@ -273,32 +273,47 @@ namespace Pigeon_Client
             if (!Directory.Exists("Files/")) Directory.CreateDirectory("Files/");
             if (File.Exists("Files/" + filename)) File.Delete("Files/" + filename);
 
-            TcpListener tcp = new TcpListener(new IPEndPoint(IPAddress.Parse(Config.CurrentConfig.ServerIP), Chat.CLIENT_FILE_PORT));
-            tcp.Start();
-
-            using (Socket socket = tcp.AcceptSocket())
+            using (TcpClient tcp = new TcpClient())
             {
-                while (socket.Available == 0) { }
-
-                byte[] buffer = new byte[socket.Available];
-                socket.Receive(buffer);
-
-                int packages_count = BitConverter.ToInt32(buffer, 0);
-                buffer = new byte[Chat.FILE_PACKAGE_SIZE];
-
-                using (FileStream fs = new FileStream("Files/" + filename, FileMode.OpenOrCreate, FileAccess.Write))
+                try
                 {
-                    for (int i = 0; i < packages_count; i++)
-                    {
-                        buffer = new byte[socket.Available];
-                        socket.Receive(buffer);
-                        fs.Write(buffer, 0, buffer.Length);
-                    }
-
-                    fs.Close();
+                    tcp.ReceiveBufferSize = Chat.FILE_PACKAGE_SIZE;
+                    tcp.SendBufferSize = Chat.FILE_PACKAGE_SIZE;
+                    tcp.Connect(new IPEndPoint(IPAddress.Parse(Config.CurrentConfig.ServerIP), Chat.CLIENT_FILE_PORT));
+                }
+                catch (Exception ex)
+                {
+                    ShowNewMessage_async($"\n[SERVER]: {ex.ToString()}");
+                    return;
                 }
 
-                socket.Close();
+                using (NetworkStream netStream = tcp.GetStream())
+                {
+                    byte[] buffer = new byte[4];
+                    netStream.Read(buffer, 0, buffer.Length);
+                    int packages_count = BitConverter.ToInt32(buffer, 0);
+                    buffer = new byte[4];
+                    netStream.Read(buffer, 0, buffer.Length);
+                    int length_data = BitConverter.ToInt32(buffer, 0);
+
+                    buffer = new byte[Chat.FILE_PACKAGE_SIZE];
+                    int to_read_length = length_data;
+
+                    using (FileStream fs = new FileStream("Files/" + filename, FileMode.OpenOrCreate, FileAccess.Write))
+                    {
+                        for (int i = 0; i < packages_count; i++)
+                        {
+                            buffer = new byte[to_read_length > Chat.FILE_PACKAGE_SIZE ? Chat.FILE_PACKAGE_SIZE : to_read_length];
+                            netStream.Read(buffer, 0, buffer.Length);
+                            fs.Write(buffer, 0, buffer.Length);
+                            to_read_length -= Chat.FILE_PACKAGE_SIZE;
+                        }
+
+                        fs.Close();
+                    }
+
+                    netStream.Close();
+                }
             }
 
             ShowNewMessage_async($"\n[SERVER]: Скачивание {filename} завершено.");

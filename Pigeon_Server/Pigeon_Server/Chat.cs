@@ -170,58 +170,28 @@ namespace Pigeon_Server
 
         void SendFile(IPEndPoint end, string path)
         {
-            using (TcpClient tcp = new TcpClient())
+            TcpListener tcp = new TcpListener(new IPEndPoint(end.Address.Address, CLIENT_FILE_PORT));
+            tcp.Start();
+
+            using (Socket socket = tcp.AcceptSocket())
             {
-                try
+                List<byte> file_data = File.ReadAllBytes($"Files/{path}").ToList();
+                int packages_count = (int)Math.Ceiling((double)file_data.Count / FILE_PACKAGE_SIZE);
+                byte[] packages_count_data = BitConverter.GetBytes(packages_count);
+                socket.Send(packages_count_data);
+                byte[] length_data = BitConverter.GetBytes(file_data.Count);
+                socket.Send(length_data);
+
+                int to_send_length = file_data.Count;
+
+                for (int i = 0; i < packages_count; i++)
                 {
-                    tcp.ReceiveBufferSize = FILE_PACKAGE_SIZE;
-                    tcp.SendBufferSize = FILE_PACKAGE_SIZE;
-                    tcp.Connect(new IPEndPoint(end.Address.Address, CLIENT_FILE_PORT));
-                    
-                }
-                catch (Exception ex)
-                {
-                    AddLog_async("SERVER", ex.Message);
-                    return;
-                }
-
-                using (NetworkStream netStream = tcp.GetStream())
-                {
-                    List<byte> file_data = File.ReadAllBytes($"Files/{path}").ToList();
-                    int packages_count = (int)Math.Ceiling((double)file_data.Count / FILE_PACKAGE_SIZE);
-                    byte[] packages_count_data = BitConverter.GetBytes(packages_count);
-                    netStream.Write(packages_count_data, 0, packages_count_data.Length);
-
-                    int to_send_length = file_data.Count;
-
-                    for (int i = 0; i < packages_count; i++)
-                    {
-                        byte[] to_send = file_data.GetRange(FILE_PACKAGE_SIZE * i, to_send_length > FILE_PACKAGE_SIZE ? FILE_PACKAGE_SIZE : to_send_length).ToArray();
-                        to_send_length -= FILE_PACKAGE_SIZE;
-                        netStream.Write(to_send, 0, to_send.Length);
-                    }
-
-                    /*byte[] file_data = File.ReadAllBytes(path);
-                    byte[] length = BitConverter.GetBytes(file_data.Length);
-                    byte[] package = new byte[4 + file_data.Length];
-                    length.CopyTo(package, 0);
-                    file_data.CopyTo(package, 4);
-
-                    int bytesSent = 0;
-                    int bytesLeft = package.Length;
-
-                    while (bytesLeft > 0)
-                    {
-                        int nextPacketSize = (bytesLeft > FILE_PACKAGE_SIZE) ? FILE_PACKAGE_SIZE : bytesLeft;
-                        netStream.Write(package, bytesSent, nextPacketSize);
-                        bytesSent += nextPacketSize;
-                        bytesLeft -= nextPacketSize;
-                    }*/
-
-                    netStream.Close(); 
+                    byte[] to_send = file_data.GetRange(FILE_PACKAGE_SIZE * i, to_send_length > FILE_PACKAGE_SIZE ? FILE_PACKAGE_SIZE : to_send_length).ToArray();
+                    to_send_length -= FILE_PACKAGE_SIZE;
+                    socket.Send(to_send);
                 }
 
-                tcp.Close();
+                socket.Close();
             }
         }
 
