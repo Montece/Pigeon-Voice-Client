@@ -16,6 +16,10 @@ namespace Pigeon_Client
     {
         public const int SERVER_PORT = 52535;
         public const int CLIENT_PORT = 52534;
+        public const int CLIENT_FILE_PORT = 52533;
+
+        public const int FILE_PACKAGE_SIZE = 1024;
+
         public static IPEndPoint ServerEnd;
 
         public static ServerInfo CurrentServer { get; private set; }

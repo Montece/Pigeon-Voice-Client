@@ -255,15 +255,53 @@ namespace Pigeon_Client
                     case ServerCommands.SendFileStatus:
                         if (bool.Parse(JSONcommand.Parameters[0]))
                         {
-                            ShowNewMessage_async("[SERVER]: Скачивание файла...");
-                            //DownloadFile
+                            string filename = JSONcommand.Parameters[1];
+                            ShowNewMessage_async($"\n[SERVER]: Скачивание файла {filename}...");
+                            Chat.Send(ClientCommands.DownloadFile, filename);
+                            new Thread(() => DownloadFile(filename)).Start();
                         }
-                        else ShowNewMessage_async("[SERVER]: Файл не найден!");
+                        else ShowNewMessage_async("\n[SERVER]: Файл не найден!");
                         break;
                     default:
                         break;
                 }
             }
+        }
+
+        private void DownloadFile(string filename)
+        {
+            if (!Directory.Exists("Files/")) Directory.CreateDirectory("Files/");
+            if (File.Exists("Files/" + filename)) File.Delete("Files/" + filename);
+
+            TcpListener tcp = new TcpListener(new IPEndPoint(IPAddress.Parse(Config.CurrentConfig.ServerIP), Chat.CLIENT_FILE_PORT));
+            tcp.Start();
+
+            using (Socket socket = tcp.AcceptSocket())
+            {
+                while (socket.Available == 0) { }
+
+                byte[] buffer = new byte[socket.Available];
+                socket.Receive(buffer);
+
+                int packages_count = BitConverter.ToInt32(buffer, 0);
+                buffer = new byte[Chat.FILE_PACKAGE_SIZE];
+
+                using (FileStream fs = new FileStream("Files/" + filename, FileMode.OpenOrCreate, FileAccess.Write))
+                {
+                    for (int i = 0; i < packages_count; i++)
+                    {
+                        buffer = new byte[socket.Available];
+                        socket.Receive(buffer);
+                        fs.Write(buffer, 0, buffer.Length);
+                    }
+
+                    fs.Close();
+                }
+
+                socket.Close();
+            }
+
+            ShowNewMessage_async($"\n[SERVER]: Скачивание {filename} завершено.");
         }
 
         ///<summary> Добавление сообщения в историю </summary>

@@ -14,6 +14,9 @@ namespace Pigeon_Server
     {
         public const int SERVER_PORT = 52535;
         public const int CLIENT_PORT = 52534;
+        public const int CLIENT_FILE_PORT = 52533;
+
+        public const int FILE_PACKAGE_SIZE = 1024;
 
         ServerWindow window;
         Thread recieverThread;
@@ -140,7 +143,13 @@ namespace Pigeon_Server
                     case ClientCommands.HasFile:
                         SendHasFile(JSONcommand.Parameters[0]);
                         break;
-                    default: AddLog_async("SERVER", "Неизвестная команда " + JSONcommand.CommandID); break;
+                    case ClientCommands.DownloadFile:
+                        string fp = JSONcommand.Parameters[0];
+                        new Thread(() => SendFile(clientEnd, fp)).Start();
+                        break;
+                    default:
+                        AddLog_async("SERVER", "Неизвестная команда " + JSONcommand.CommandID);
+                        break;
                 }
                 window.ShowUsers_async();
                 window.ShowServers_async();
@@ -151,7 +160,7 @@ namespace Pigeon_Server
         {
             string[] files = Directory.GetFiles(Database.FilesPath, filename);
             bool status = files.Length == 1;
-            SendCommand(ServerCommands.SendFileStatus, null, status.ToString());
+            SendCommand(ServerCommands.SendFileStatus, null, status.ToString(), filename);
         }
 
         void UpdateClient()
@@ -161,43 +170,59 @@ namespace Pigeon_Server
 
         void SendFile(IPEndPoint end, string path)
         {
-            const int bufferSize = 1024;
-
-            IPEndPoint endTCP = new IPEndPoint(end.Address, end.Port);
-            TcpClient tcp = new TcpClient();
-            NetworkStream netStream;
-
-            try
+            using (TcpClient tcp = new TcpClient())
             {
-                tcp.Connect(endTCP);
+                try
+                {
+                    tcp.ReceiveBufferSize = FILE_PACKAGE_SIZE;
+                    tcp.SendBufferSize = FILE_PACKAGE_SIZE;
+                    tcp.Connect(new IPEndPoint(end.Address.Address, CLIENT_FILE_PORT));
+                    
+                }
+                catch (Exception ex)
+                {
+                    AddLog_async("SERVER", ex.Message);
+                    return;
+                }
+
+                using (NetworkStream netStream = tcp.GetStream())
+                {
+                    List<byte> file_data = File.ReadAllBytes($"Files/{path}").ToList();
+                    int packages_count = (int)Math.Ceiling((double)file_data.Count / FILE_PACKAGE_SIZE);
+                    byte[] packages_count_data = BitConverter.GetBytes(packages_count);
+                    netStream.Write(packages_count_data, 0, packages_count_data.Length);
+
+                    int to_send_length = file_data.Count;
+
+                    for (int i = 0; i < packages_count; i++)
+                    {
+                        byte[] to_send = file_data.GetRange(FILE_PACKAGE_SIZE * i, to_send_length > FILE_PACKAGE_SIZE ? FILE_PACKAGE_SIZE : to_send_length).ToArray();
+                        to_send_length -= FILE_PACKAGE_SIZE;
+                        netStream.Write(to_send, 0, to_send.Length);
+                    }
+
+                    /*byte[] file_data = File.ReadAllBytes(path);
+                    byte[] length = BitConverter.GetBytes(file_data.Length);
+                    byte[] package = new byte[4 + file_data.Length];
+                    length.CopyTo(package, 0);
+                    file_data.CopyTo(package, 4);
+
+                    int bytesSent = 0;
+                    int bytesLeft = package.Length;
+
+                    while (bytesLeft > 0)
+                    {
+                        int nextPacketSize = (bytesLeft > FILE_PACKAGE_SIZE) ? FILE_PACKAGE_SIZE : bytesLeft;
+                        netStream.Write(package, bytesSent, nextPacketSize);
+                        bytesSent += nextPacketSize;
+                        bytesLeft -= nextPacketSize;
+                    }*/
+
+                    netStream.Close(); 
+                }
+
+                tcp.Close();
             }
-            catch (Exception ex)
-            {
-                AddLog_async("SERVER", ex.Message);
-                return;
-            }
-
-            netStream = tcp.GetStream();
-
-            byte[] data = File.ReadAllBytes(path);
-            byte[] length = BitConverter.GetBytes(data.Length);
-            byte[] package = new byte[4 + data.Length];
-            length.CopyTo(package, 0);
-            data.CopyTo(package, 4);
-
-            int bytesSent = 0;
-            int bytesLeft = package.Length;
-
-            while (bytesLeft > 0)
-            {
-                int nextPacketSize = (bytesLeft > bufferSize) ? bufferSize : bytesLeft;
-                netStream.Write(package, bytesSent, nextPacketSize);
-                bytesSent += nextPacketSize;
-                bytesLeft -= nextPacketSize;
-            }
-
-            netStream.Close();
-            tcp.Close();
         }
 
         public static void SendCommand(ServerCommands id, IPEndPoint otherEnd, params string[] parameters)

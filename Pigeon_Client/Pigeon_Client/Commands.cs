@@ -47,7 +47,8 @@ namespace Pigeon_Client
         Disconnect,
         TextMessage,
         GetUpdate,
-        HasFile
+        HasFile,
+        DownloadFile
     }
 
     public enum ServerCommands
