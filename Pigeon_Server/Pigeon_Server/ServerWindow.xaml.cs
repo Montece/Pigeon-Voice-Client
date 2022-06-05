@@ -208,7 +208,7 @@ namespace Pigeon_Server
             User user = Database.GetUser(UsersList.SelectedIndex);
             if (user != null)
             {
-                UserInfo.Content = $"Ник: {user.Info.Nickname}{n}Логин: {user.Info.Login}{n}Пароль: {user.Info.Password}{n}Почта: {user.Info.Email}{n}Код восстановления: {user.Info.RecoveryCode}{n}Текущий сервер: {(user.CurrentServer == null ? "Нет" : user.CurrentServer.Info.Title)}{n}IP: {user.IpAddress}";
+                UserInfo.Content = $"Ник: {user.Info.Nickname}{n}Логин: {user.Info.Login}{n}Пароль: {user.Info.Password}{n}Почта: {user.Info.Email}{n}Код восстановления: {user.Info.RecoveryCode}{n}Текущий сервер: {(user.CurrentServer == null ? "Нет" : user.CurrentServer.Info.Title)}{n}IP: {user.CommandsIpAddress}";
             }
         }
 
@@ -226,11 +226,27 @@ namespace Pigeon_Server
                     {
                         foreach (User user in server.Users)
                         {
-                            Chat.SendCommand(ServerCommands.TextMessage, user.IpAddress, $"[SERVER]: {msg}{Environment.NewLine}");
+                            Chat.SendCommand(ServerCommands.TextMessage, user.CommandsIpAddress, $"[SERVER]: {msg}{Environment.NewLine}");
                         }
                     }
                  
                     message = $"Уведомление отправлено ({msg})";
+                }
+                else if (text.Contains("create_server: "))
+                {
+                    string msg = text.Substring(text.IndexOf(":") + 2);
+                    string[] msg_mas = msg.Split(' ');
+                    try
+                    {
+                        Database.CreateServer(msg_mas[0], msg_mas[1], int.Parse(msg_mas[2]));
+                        message = $"Сервер создан ({msg_mas[0]})";
+                    }
+                    catch (Exception ex)
+                    {
+                        message = ex.Message;
+                    }
+
+                   
                 }
                 else message = "Неизвестная команда.";
                 AddLog("SERVER", message);

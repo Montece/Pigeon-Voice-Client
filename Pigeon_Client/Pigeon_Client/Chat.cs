@@ -14,21 +14,23 @@ namespace Pigeon_Client
 {
     public static class Chat
     {
-        public const int SERVER_PORT = 52535;
-        public const int CLIENT_PORT = 52534;
+        public const int SERVER_COMMANDS_PORT = 52535;
+        public const int SERVER_VOICE_PORT = 52536;
         public const int CLIENT_FILE_PORT = 52533;
 
         public const int FILE_PACKAGE_SIZE = 1024;
-
-        public static IPEndPoint ServerEnd;
 
         public static ServerInfo CurrentServer { get; private set; }
         public static List<ServerInfo> Servers = new List<ServerInfo>();
         static string Login { get; set; } = "";
         static string Nickname { get; set; } = "";
 
-        public static IPEndPoint end = new IPEndPoint(IPAddress.Any, SERVER_PORT);
-        public static UdpClient udp = new UdpClient(CLIENT_PORT);
+        public static UdpClient CommandsUdp = new UdpClient();
+        public static UdpClient VoiceUdp = new UdpClient();
+        public static IPEndPoint CommandsEnd = new IPEndPoint(IPAddress.Any, SERVER_COMMANDS_PORT);
+        public static IPEndPoint VoiceEnd = new IPEndPoint(IPAddress.Any, SERVER_VOICE_PORT);
+
+        static XmlSerializer VoiceXML = new XmlSerializer(typeof(VoiceCommand));
 
         static List<byte> request = new List<byte>();
         static int RequestType;
@@ -38,13 +40,15 @@ namespace Pigeon_Client
 
         public static void SetIP(string serverIP)
         {
-            ServerEnd = new IPEndPoint(IPAddress.Parse(serverIP), SERVER_PORT);
+            if (!IPAddress.TryParse(serverIP, out IPAddress ipAddress)) ipAddress = Dns.GetHostEntry(serverIP).AddressList[0];
+            CommandsEnd = new IPEndPoint(ipAddress, SERVER_COMMANDS_PORT);
+            VoiceEnd = new IPEndPoint(ipAddress, SERVER_VOICE_PORT);
         }
 
         public static string GetServerVersion()
         {
-            Send(ClientCommands.GetServerVersion,/* null,*/ Library.Version);
-            bool status = Recieve(out Params, out Voice);
+            SendCommand(ClientCommands.GetServerVersion, Library.Version);
+            bool status = RecieveCommand(out Params, out Voice);
             if (!status) return "ERROR";    
             return Params[0];
         }
@@ -62,8 +66,8 @@ namespace Pigeon_Client
         public static bool LogIn(string login, string password)
         {
             Login = login;
-            Send(ClientCommands.LogIn, /*null,*/ login, password);
-            Recieve(out Params, out Voice);
+            SendCommand(ClientCommands.LogIn, login, password);
+            RecieveCommand(out Params, out Voice);
             Nickname = Params[1];
             return bool.Parse(Params[0]);
         }
@@ -72,15 +76,15 @@ namespace Pigeon_Client
         {
             Login = login;
             Nickname = nickname;
-            Send(ClientCommands.Register,/* null,*/ nickname, login, password, email);
-            Recieve(out Params, out Voice);
+            SendCommand(ClientCommands.Register, nickname, login, password, email);
+            RecieveCommand(out Params, out Voice);
             return bool.Parse(Params[0]);
         }
 
         public static void GetServers()
         {
-            Send(ClientCommands.GetAllServers, null);
-            Recieve(out Params, out Voice);
+            SendCommand(ClientCommands.GetAllServers, null);
+            RecieveCommand(out Params, out Voice);
 
             XmlSerializer ServersXML = new XmlSerializer(typeof(ServersSavingData));
             StringReader writer = new StringReader(Params[0]);
@@ -90,23 +94,23 @@ namespace Pigeon_Client
 
         public static bool ConnectToServer()
         {
-            Send(ClientCommands.ConnectToServer,/* null,*/ Login, CurrentServer.SID);
-            Recieve(out Params, out Voice);
+            SendCommand(ClientCommands.ConnectToServer, Login, CurrentServer.SID);
+            RecieveCommand(out Params, out Voice);
             bool success = bool.Parse(Params[0]);
             return success;
         }
 
         public static string LoadHistory()
         {
-            Send(ClientCommands.LoadHistory,/* null,*/ CurrentServer.SID);
-            Recieve(out Params, out Voice);
+            SendCommand(ClientCommands.LoadHistory,/* null,*/ CurrentServer.SID);
+            RecieveCommand(out Params, out Voice);
             return Params[0];
         }
 
         public static List<ShortUserInfo> GetUsers()
         {
-            Send(ClientCommands.GetServerUsers,/* null,*/ CurrentServer.SID);
-            Recieve(out Params, out Voice);
+            SendCommand(ClientCommands.GetServerUsers,/* null,*/ CurrentServer.SID);
+            RecieveCommand(out Params, out Voice);
             var a = Params[0];
             XmlSerializer UsersXML = new XmlSerializer(typeof(UsersSavingData2));
             StringReader writer = new StringReader(Params[0]);
@@ -116,27 +120,25 @@ namespace Pigeon_Client
 
         public static void SendTextMessage(string text)
         {
-            Send(ClientCommands.TextMessage,/* null,*/ CurrentServer.SID, text, Login);
+            SendCommand(ClientCommands.TextMessage,/* null,*/ CurrentServer.SID, text, Login);
         }
 
-        static bool Recieve(out List<string> result, out List<byte> voice)
+        static bool RecieveCommand(out List<string> result, out List<byte> voice)
         {
             result = null;
             voice = null;
             request.Clear();
-            RequestType = 0;
             JSONcommand = null;
 
             try
             {
-                request = udp.Receive(ref end).ToList();
+                request = CommandsUdp.Receive(ref CommandsEnd).ToList();
             }
             catch (SocketException x)
             {
                 return false;
             }
 
-            RequestType = request[0];
             if (RequestType == 0)
             {
                 request.RemoveAt(0);
@@ -161,14 +163,35 @@ namespace Pigeon_Client
             return false;
         }
 
-        public static void Send(ClientCommands id, params string[] parameters)
+        static List<byte> RecieveVoice()
+        {
+            List<byte> VoiceRequest = new List<byte>();
+
+            try
+            {
+                request = VoiceUdp.Receive(ref VoiceEnd).ToList();
+            }
+            catch
+            {
+                return new List<byte>();
+            }
+
+            int length = request[0];
+            StringReader reader = new StringReader(Encoding.UTF8.GetString(request.GetRange(1, length).ToArray()));
+            VoiceCommand command = (VoiceCommand)VoiceXML.Deserialize(reader);
+            VoiceRequest.RemoveRange(0, length);
+
+            return VoiceRequest;
+        }
+
+        public static void SendCommand(ClientCommands id, params string[] parameters)
         {
             ClientCommand command = new ClientCommand() { CommandID = id, Parameters = parameters?.ToList() };
-            List<byte> request = new List<byte>() { 0 };
+            List<byte> request = new List<byte>();
             byte[] json = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(command, Formatting.Indented));
             request.AddRange(json);
             byte[] array = request.ToArray();
-            udp.Send(array, array.Length, ServerEnd);
+            CommandsUdp.Send(array, array.Length, CommandsEnd);
         }
 
         public static void SendVoice(byte[] voice)
@@ -177,9 +200,10 @@ namespace Pigeon_Client
             VoiceCommand command = new VoiceCommand
             {
                 SID = CurrentServer.SID,
-                Login = Login
+                Login = Login,
+                Init = false
             };
-            List<byte> request = new List<byte> { 1 };
+            List<byte> request = new List<byte>();
 
             StringWriter writer = new StringWriter();
             VoiceXML.Serialize(writer, command);
@@ -188,12 +212,32 @@ namespace Pigeon_Client
             request.AddRange(commandBYTE);
             request.AddRange(voice);
             byte[] array = request.ToArray();
-            udp.Send(array, array.Length, ServerEnd);
+            VoiceUdp.Send(array, array.Length, VoiceEnd);
+        }
+
+        public static void InitVoice()
+        {
+            XmlSerializer VoiceXML = new XmlSerializer(typeof(VoiceCommand));
+            VoiceCommand command = new VoiceCommand
+            {
+                SID = "",
+                Login = Login,
+                Init = true
+            };
+            List<byte> request = new List<byte>();
+
+            StringWriter writer = new StringWriter();
+            VoiceXML.Serialize(writer, command);
+            byte[] commandBYTE = Encoding.UTF8.GetBytes(writer.ToString());
+            request.Add((byte)commandBYTE.Length);
+            request.AddRange(commandBYTE);
+            byte[] array = request.ToArray();
+            VoiceUdp.Send(array, array.Length, VoiceEnd);
         }
 
         public static void Stop()
         {
-            Send(ClientCommands.Disconnect,/* null,*/ Login, CurrentServer.SID);
+            SendCommand(ClientCommands.Disconnect, Login, CurrentServer.SID);
         }
     }
 

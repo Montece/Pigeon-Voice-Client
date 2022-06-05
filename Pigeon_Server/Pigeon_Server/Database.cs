@@ -110,9 +110,17 @@ namespace Pigeon_Server
                     RecoveryCode = recoverycode
                 },
                 CurrentServer = null,
-                IpAddress = null
+                CommandsIpAddress = null
             };
-            Users.Add(login, user);
+            try
+            {
+                Users.Add(login, user);
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -126,12 +134,24 @@ namespace Pigeon_Server
                 Password = password
             });
             Servers.Add(sid, server);
+            SaveServers();
             return true;
         }
 
-        public static void SetUserIP(string login, IPEndPoint end)
+        public static void SetUserCommandsIP(string login, IPEndPoint end)
         {
-            if (Users.TryGetValue(login, out User user)) user.IpAddress = end;
+            if (Users.TryGetValue(login, out User user))
+            {
+                user.CommandsIpAddress = end;
+            }
+        }
+
+        public static void SetUserVoiceIP(string login, IPEndPoint end)
+        {
+            if (Users.TryGetValue(login, out User user))
+            {
+                user.VoiceIpAddress = end;
+            }
         }
 
         public static bool HasUser(string login, string password)
@@ -201,23 +221,15 @@ namespace Pigeon_Server
             }
         }
 
-        public static void SendVoice(VoiceCommand command, byte[] voice)
+        public static void SendVoice(VoiceCommand command, byte[] package)
         {
             if (Servers.TryGetValue(command.SID, out Server server))
             {
-                foreach (var item in server.Users)
+                foreach (User user in server.Users)
                 {
-                    if (item.Info.Login.Equals(command.Login)) continue;
+                    if (user.Info.Login.Equals(command.Login)) continue;
 
-                    StringWriter writer = new StringWriter();
-                    VoiceXML.Serialize(writer, command);
-                    List<byte> request = new List<byte> { 1 };
-                    byte[] commandBYTE = Encoding.UTF8.GetBytes(writer.ToString());
-                    request.Add((byte)commandBYTE.Length);
-                    request.AddRange(commandBYTE);
-                    request.AddRange(voice);
-                    byte[] array = request.ToArray();
-                    Chat.udp.Send(array, array.Length, new IPEndPoint(item.IpAddress.Address.Address, Chat.CLIENT_PORT));
+                    Chat.VoiceUdp.Send(package, package.Length, user.VoiceIpAddress);
                 }                
             }
         }

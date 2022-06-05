@@ -38,7 +38,9 @@ namespace Pigeon_Client
 
         /*ОСНОВНЫЕ*/
         List<User> ServerUsers = new List<User>();
-        Thread RecieverThread;
+        
+        private Thread CommandsRecieverThread;
+        private Thread VoiceRecieverThread;
 
         /*ЗВУК*/
         WaveInEvent WI = new WaveInEvent();
@@ -72,11 +74,13 @@ namespace Pigeon_Client
             MyWO.Play();
 
             new Thread(GetServers).Start();
+            Chat.InitVoice();
         }
         
         ///<summary> Обновить список микрофонов </summary>
         void LoadMicros()
         {
+            Microphones.Items.Clear();
             int count = WaveIn.DeviceCount;
             for (int i = 0; i < count; i++)
             {
@@ -101,7 +105,7 @@ namespace Pigeon_Client
                     if (msg.Contains("download "))
                     {
                         string filename = msg.Substring(9);
-                        Chat.Send(ClientCommands.HasFile, filename);
+                        Chat.SendCommand(ClientCommands.HasFile, filename);
                     }
                 }
                 else
@@ -130,7 +134,8 @@ namespace Pigeon_Client
             u.Buffer.BufferLength = 65536;
             u.WO.Init(u.Buffer);
             u.WO.Init(u.Volume);
-            u.WO.Volume = Volume;
+            u.Volume.Volume = Volume;
+            //u.WO.Volume = Volume;
             u.WO.Play();
             ServerUsers.Add(u);
             Users.Items.Add(u.Nickname);
@@ -167,7 +172,7 @@ namespace Pigeon_Client
         }
 
         ///<summary> Прослушиватель UDP </summary>
-        void Receiver()
+        void CommandsReceiver()
         {
             //string history = Chat.LoadHistory();
             //ShowNewMessage_async(history);
@@ -176,7 +181,6 @@ namespace Pigeon_Client
             foreach (ShortUserInfo user in Users) AddUser_async(user);
 
             List<byte> request = new List<byte>();
-            int RequestType;
             ServerCommand JSONcommand;
             XmlSerializer UsersXML = new XmlSerializer(typeof(ShortUserInfo));
             StringReader reader;
@@ -185,50 +189,25 @@ namespace Pigeon_Client
             while (true)
             {
                 request.Clear();
-                RequestType = 0;
                 JSONcommand = null;
                 GC.Collect();
                 Thread.Sleep(0);
 
                 try
                 {
-                    request = Chat.udp.Receive(ref Chat.end).ToList();
+                    request = Chat.CommandsUdp.Receive(ref Chat.CommandsEnd).ToList();
                 }
                 catch
                 {
                     continue;
                 }
 
-                RequestType = request[0];
-                if (RequestType == 0)
+                try
                 {
-                    request.RemoveAt(0);
-                    try
-                    {
-                        JSONcommand = JsonConvert.DeserializeObject<ServerCommand>(Encoding.UTF8.GetString(request.ToArray()));
-                    }
-                    catch
-                    {
-                        continue;
-                    }
+                    JSONcommand = JsonConvert.DeserializeObject<ServerCommand>(Encoding.UTF8.GetString(request.ToArray()));
                 }
-                else
-                if (RequestType == 1)
+                catch
                 {
-                    request.RemoveAt(0);
-                    int length = request[0];
-                    request.RemoveAt(0);
-                    XmlSerializer VoiceXML = new XmlSerializer(typeof(VoiceCommand));
-                    reader = new StringReader(Encoding.UTF8.GetString(request.GetRange(0, length).ToArray()));
-                    VoiceCommand command = (VoiceCommand)VoiceXML.Deserialize(reader);
-                    request.RemoveRange(0, length);
-                    byte[] array = request.ToArray();
-
-                    foreach (User user in ServerUsers)
-                    {
-                        if (user.Login != command.Login)
-                        user.Buffer.AddSamples(array, 0, array.Length);
-                    };
                     continue;
                 }
 
@@ -257,7 +236,7 @@ namespace Pigeon_Client
                         {
                             string filename = JSONcommand.Parameters[1];
                             ShowNewMessage_async($"\n[SERVER]: Скачивание файла {filename}...");
-                            Chat.Send(ClientCommands.DownloadFile, filename);
+                            Chat.SendCommand(ClientCommands.DownloadFile, filename);
                             new Thread(() => DownloadFile(filename)).Start();
                         }
                         else ShowNewMessage_async("\n[SERVER]: Файл не найден!");
@@ -268,52 +247,73 @@ namespace Pigeon_Client
             }
         }
 
+        void VoiceReceiver()
+        {
+            List<byte> VoiceRequest = new List<byte>();
+            VoiceCommand JSONcommand;
+            XmlSerializer UsersXML = new XmlSerializer(typeof(ShortUserInfo));
+
+            while (true)
+            {
+                VoiceRequest.Clear();
+                JSONcommand = null;
+
+                try
+                {
+                    VoiceRequest = Chat.VoiceUdp.Receive(ref Chat.VoiceEnd).ToList();
+                }
+                catch
+                {
+                    continue;
+                }
+
+                int length = VoiceRequest[0];
+                VoiceRequest.RemoveAt(0);
+                XmlSerializer VoiceXML = new XmlSerializer(typeof(VoiceCommand));
+                StringReader reader = new StringReader(Encoding.UTF8.GetString(VoiceRequest.GetRange(0, length).ToArray()));
+                VoiceCommand command = (VoiceCommand)VoiceXML.Deserialize(reader);
+                VoiceRequest.RemoveRange(0, length);
+                byte[] array = VoiceRequest.ToArray();
+
+                foreach (User user in ServerUsers)
+                {
+                    if (user.Login == command.Login)
+                        user.Buffer.AddSamples(array, 0, array.Length);
+                };
+            }
+        }
+
         private void DownloadFile(string filename)
         {
             if (!Directory.Exists("Files/")) Directory.CreateDirectory("Files/");
             if (File.Exists("Files/" + filename)) File.Delete("Files/" + filename);
 
-            using (TcpClient tcp = new TcpClient())
+            TcpListener tcp = new TcpListener(new IPEndPoint(IPAddress.Any, Chat.CLIENT_FILE_PORT));
+            tcp.Start();
+
+            using (Socket socket = tcp.AcceptSocket())
             {
-                try
-                {
-                    tcp.ReceiveBufferSize = Chat.FILE_PACKAGE_SIZE;
-                    tcp.SendBufferSize = Chat.FILE_PACKAGE_SIZE;
-                    tcp.Connect(new IPEndPoint(IPAddress.Parse(Config.CurrentConfig.ServerIP), Chat.CLIENT_FILE_PORT));
-                }
-                catch (Exception ex)
-                {
-                    ShowNewMessage_async($"\n[SERVER]: {ex.ToString()}");
-                    return;
-                }
+                while (socket.Available == 0) { }
 
-                using (NetworkStream netStream = tcp.GetStream())
+                byte[] buffer = new byte[socket.Available];
+                socket.Receive(buffer);
+
+                int packages_count = BitConverter.ToInt32(buffer, 0);
+                buffer = new byte[Chat.FILE_PACKAGE_SIZE];
+
+                using (FileStream fs = new FileStream("Files/" + filename, FileMode.OpenOrCreate, FileAccess.Write))
                 {
-                    byte[] buffer = new byte[4];
-                    netStream.Read(buffer, 0, buffer.Length);
-                    int packages_count = BitConverter.ToInt32(buffer, 0);
-                    buffer = new byte[4];
-                    netStream.Read(buffer, 0, buffer.Length);
-                    int length_data = BitConverter.ToInt32(buffer, 0);
-
-                    buffer = new byte[Chat.FILE_PACKAGE_SIZE];
-                    int to_read_length = length_data;
-
-                    using (FileStream fs = new FileStream("Files/" + filename, FileMode.OpenOrCreate, FileAccess.Write))
+                    for (int i = 0; i < packages_count; i++)
                     {
-                        for (int i = 0; i < packages_count; i++)
-                        {
-                            buffer = new byte[to_read_length > Chat.FILE_PACKAGE_SIZE ? Chat.FILE_PACKAGE_SIZE : to_read_length];
-                            netStream.Read(buffer, 0, buffer.Length);
-                            fs.Write(buffer, 0, buffer.Length);
-                            to_read_length -= Chat.FILE_PACKAGE_SIZE;
-                        }
-
-                        fs.Close();
+                        buffer = new byte[socket.Available];
+                        socket.Receive(buffer);
+                        fs.Write(buffer, 0, buffer.Length);
                     }
 
-                    netStream.Close();
+                    fs.Close();
                 }
+
+                socket.Close();
             }
 
             ShowNewMessage_async($"\n[SERVER]: Скачивание {filename} завершено.");
@@ -440,23 +440,24 @@ namespace Pigeon_Client
         ///<summary> Отключение от сервера </summary>
         void Disconnect_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("В разработке", "В разработке", MessageBoxButton.OK, MessageBoxImage.Information);
-            /*IsOnServer = false;
+            //MessageBox.Show("В разработке", "В разработке", MessageBoxButton.OK, MessageBoxImage.Information);
+            IsOnServer = false;
             Chat.Stop();
-            RecieverThread.Abort();
+            CommandsRecieverThread.Abort();
+            VoiceRecieverThread.Abort();
             DoubleAnimation Start_PageAnimation_Height = new DoubleAnimation();
             Start_PageAnimation_Height.From = Start_Page.ActualHeight;
             Start_PageAnimation_Height.To = Start_Page.ActualHeight / 1.1;
             Start_PageAnimation_Height.Duration = TimeSpan.FromSeconds(1);
 
-            DoubleAnimation Start_PageAnimation_Width = new DoubleAnimation();
+            /*DoubleAnimation Start_PageAnimation_Width = new DoubleAnimation();
             Start_PageAnimation_Width.From = Start_Page.ActualWidth;
             Start_PageAnimation_Width.To = Start_Page.ActualWidth / 1.1;
-            Start_PageAnimation_Width.Duration = TimeSpan.FromSeconds(1);
+            Start_PageAnimation_Width.Duration = TimeSpan.FromSeconds(1);*/
 
             Start_Page.BeginAnimation(HeightProperty, Start_PageAnimation_Height);
-            Start_Page.BeginAnimation(WidthProperty, Start_PageAnimation_Width);
-            Start_Page.Opacity = 1;*/
+           // Start_Page.BeginAnimation(WidthProperty, Start_PageAnimation_Width);
+            Start_Page.Opacity = 1;
         }
 
         #region Style
@@ -600,8 +601,10 @@ namespace Pigeon_Client
         void Success()
         {
             LoadMicros();
-            RecieverThread = new Thread(Receiver) { Name = "Reciever" };
-            RecieverThread.Start();
+            CommandsRecieverThread = new Thread(CommandsReceiver) { Name = "Commands Reciever" };
+            CommandsRecieverThread.Start();
+            VoiceRecieverThread = new Thread(VoiceReceiver) { Name = "Voice Reciever" };
+            VoiceRecieverThread.Start();
             Start_Page.Height = 0;
             IsOnServer = true;
 

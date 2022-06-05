@@ -16,7 +16,8 @@ namespace Pigeon_Server
     public class User
     {
         public UserInfo Info;
-        public IPEndPoint IpAddress;
+        public IPEndPoint CommandsIpAddress;
+        public IPEndPoint VoiceIpAddress;
         public Server CurrentServer;
     }
 }

@@ -33,6 +33,7 @@ namespace Pigeon_Client
     {
         public string SID { get; set; }
         public string Login { get; set; }
+        public bool Init { get; set; }
     }
 
     public enum ClientCommands

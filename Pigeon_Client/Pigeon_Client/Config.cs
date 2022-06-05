@@ -23,7 +23,7 @@ namespace Pigeon_Client
         {
             Config config = new Config()
             {
-                ServerIP = "127.0.0.1"
+                ServerIP = /*"127.0.0.1"*/"kukakur.keenetic.link"
             };
 
             return config;

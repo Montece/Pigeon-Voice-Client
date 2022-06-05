@@ -82,8 +82,8 @@ namespace Pigeon_Server
         {
             foreach (User user in Users)
             {
-                if (odd == null) Chat.SendCommand(ServerCommands.TextMessage, user.IpAddress, text);
-                else if (odd.Address.ToString() != user.IpAddress.Address.ToString()) Chat.SendCommand(ServerCommands.TextMessage, user.IpAddress, text);
+                if (odd == null) Chat.SendCommand(ServerCommands.TextMessage, user.CommandsIpAddress, text);
+                else if (odd.ToString() != user.CommandsIpAddress.ToString()) Chat.SendCommand(ServerCommands.TextMessage, user.CommandsIpAddress, text);
             }
         }
 
@@ -96,7 +96,7 @@ namespace Pigeon_Server
                     if (Users.Count < Info.MaxUsersCount)
                     {
                         if (Info.Password == password)
-                        {                           
+                        {            
                             user.CurrentServer = this;
                             Users.Add(user);
                             return true;
@@ -124,19 +124,30 @@ namespace Pigeon_Server
 
             foreach (User u in Users)
             {
-                if (u.IpAddress.Address.ToString() != end.Address.ToString()) Chat.SendCommand(ServerCommands.OnUserConnect, u.IpAddress, CreateStringFromShortInfo(info));
+                if (u.CommandsIpAddress.ToString() != end.ToString()) Chat.SendCommand(ServerCommands.OnUserConnect, u.CommandsIpAddress, CreateStringFromShortInfo(info));
             }         
         }
 
         public void OnDisconnect(User user)
         {
-            ShortUserInfo info = new ShortUserInfo
+            try
             {
-                Login = user.Info.Login,
-                Nickname = user.Info.Nickname
-            };
-            Alert($"{user.Info.Nickname} отсоединился");
-            Chat.SendCommand(ServerCommands.OnUserDisconnect, null, CreateStringFromShortInfo(info));
+                if (user == null)
+                    return;
+                ShortUserInfo info = new ShortUserInfo
+                {
+                    Login = user.Info.Login,
+                    Nickname = user.Info.Nickname
+                };
+                Alert($"{user.Info.Nickname} отсоединился");
+                
+                foreach (User u in user.CurrentServer?.Users)
+                {
+                    if (u.Info.Login != user.Info.Login) Chat.SendCommand(ServerCommands.OnUserDisconnect, u.CommandsIpAddress, CreateStringFromShortInfo(info));
+                }
+            }
+            catch(Exception ex) { }
+            
         }
 
         string CreateStringFromShortInfo(ShortUserInfo info)
@@ -151,7 +162,7 @@ namespace Pigeon_Server
         {
             if (Users.Contains(user))
             {               
-                if (user.IpAddress.Address.ToString() != currentEnd.Address.ToString()) Chat.Kick(currentEnd);
+                if (user.CommandsIpAddress.Address.ToString() != currentEnd.Address.ToString()) Chat.Kick(currentEnd);
                 user.CurrentServer = null;
                 Users.Remove(user);
                 return true;
